@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>3-Link Robotic Arm</title>
+  <style>
+    canvas { border: 1px solid black; background: #f0f0f0; }
+    table, td { border: 1px solid; padding: 5px; }
+    button { font-size: 20px; width: 40px; height: 40px; margin: 2px; }
+  </style>
+</head>
+<body>
+  <canvas id="armCanvas" width="500" height="500"></canvas>
+  <table>
+    <tr><td>Joint 1</td><td id="j1"></td></tr>
+    <tr><td>Joint 2</td><td id="j2"></td></tr>
+    <tr><td>End Effector</td><td id="ee"></td></tr>
+    <tr><td>Angles (°)</td><td id="angles"></td></tr>
+  </table>
+  <div>
+    <button onclick="move('up-left')">↖️</button>
+    <button onclick="move('up')">⬆️</button>
+    <button onclick="move('up-right')">↗️</button><br />
+    <button onclick="move('left')">⬅️</button>
+    <button onclick="move('center')">⭕</button>
+    <button onclick="move('right')">➡️</button><br />
+    <button onclick="move('down-left')">↙️</button>
+    <button onclick="move('down')">⬇️</button>
+    <button onclick="move('down-right')">↘️</button>
+  </div>
+
+  <script>
+    const ctx = document.getElementById('armCanvas').getContext('2d');
+    const baseX = 250;
+    const baseY = 250;
+    const armLength = 100;
+    const maxReach = 3 * armLength;
+
+    let angles = [0, 0, 0];
+    let target = [150, 0]; // relative to base (0,0)
+
+    // For blocking moves based on quadrant + angles = (A1, 0, 0)
+    // Return true if move forbidden
+    function isMoveForbidden(oldTarget, newTarget, currentAngles) {
+      const [x0, y0] = oldTarget;
+      const [x1, y1] = newTarget;
+      const [a1, a2, a3] = currentAngles;
+
+      // Check if a2 and a3 near zero
+      if (Math.abs(a2) > 0.5 || Math.abs(a3) > 0.5) return false;
+
+      // Determine quadrant of EE
+      let quadrant = null;
+      if (x0 > 0 && y0 < 0) quadrant = 4;
+      else if (x0 > 0 && y0 > 0) quadrant = 1;
+      else if (x0 < 0 && y0 > 0) quadrant = 2;
+      else if (x0 < 0 && y0 < 0) quadrant = 3;
+      else return false; // origin or on axes, allow
+
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+
+      if (quadrant === 4 && dx > 0 && dy < 0) return true;  // forbidden case 1
+      if (quadrant === 1 && dx > 0 && dy > 0) return true;  // forbidden case 2
+      if (quadrant === 2 && dx < 0 && dy > 0) return true;  // forbidden case 3
+      if (quadrant === 3 && dx < 0 && dy < 0) return true;  // forbidden case 4
+
+      return false;
+    }
+
+    // Clamp target position within circle of radius maxReach
+    function clampTarget(x, y) {
+      const dist = Math.sqrt(x*x + y*y);
+      if (dist > maxReach) {
+        const scale = maxReach / dist;
+        return [x * scale, y * scale];
+      }
+      return [x, y];
+    }
+
+    function drawArm(j1, j2, ee) {
+      ctx.clearRect(0, 0, 500, 500);
+      ctx.lineWidth = 8;
+      ctx.lineCap = 'round';
+
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(baseX, baseY, 10, 0, 2 * Math.PI);
+      ctx.fill();
+
+      ctx.strokeStyle = '#0077be';
+      ctx.beginPath();
+      ctx.moveTo(baseX, baseY);
+      ctx.lineTo(baseX + j1[0], baseY - j1[1]);
+      ctx.stroke();
+
+      ctx.fillStyle = '#004d73';
+      ctx.beginPath();
+      ctx.arc(baseX + j1[0], baseY - j1[1], 8, 0, 2 * Math.PI);
+      ctx.fill();
+
+      ctx.strokeStyle = '#00aaff';
+      ctx.beginPath();
+      ctx.moveTo(baseX + j1[0], baseY - j1[1]);
+      ctx.lineTo(baseX + j2[0], baseY - j2[1]);
+      ctx.stroke();
+
+      ctx.fillStyle = '#0077be';
+      ctx.beginPath();
+      ctx.arc(baseX + j2[0], baseY - j2[1], 8, 0, 2 * Math.PI);
+      ctx.fill();
+
+      ctx.strokeStyle = '#66ccff';
+      ctx.beginPath();
+      ctx.moveTo(baseX + j2[0], baseY - j2[1]);
+      ctx.lineTo(baseX + ee[0], baseY - ee[1]);
+      ctx.stroke();
+
+      ctx.fillStyle = '#005580';
+      ctx.beginPath();
+      ctx.arc(baseX + ee[0], baseY - ee[1], 10, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    function updateTable(j1, j2, ee, angles) {
+      document.getElementById('j1').innerText = j1.map(n => n.toFixed(1)).join(', ');
+      document.getElementById('j2').innerText = j2.map(n => n.toFixed(1)).join(', ');
+      document.getElementById('ee').innerText = ee.map(n => n.toFixed(1)).join(', ');
+      document.getElementById('angles').innerText = angles.map(a => a.toFixed(1)).join(', ');
+    }
+
+    async function move(direction) {
+      const dxdy = {
+        'up': [0, 10], 'down': [0, -10], 'left': [-10, 0], 'right': [10, 0],
+        'up-left': [-10, 10], 'up-right': [10, 10],
+        'down-left': [-10, -10], 'down-right': [10, -10],
+        'center': [0,0]
+      };
+      if (!(direction in dxdy)) return;
+
+      const newTargetX = target[0] + dxdy[direction][0];
+      const newTargetY = target[1] + dxdy[direction][1];
+      let clampedTarget = clampTarget(newTargetX, newTargetY);
+
+      if (isMoveForbidden(target, clampedTarget, angles)) {
+        // Block the move
+        return;
+      }
+
+      // Save old target & angles for backend validation
+      const payload = {
+        target: clampedTarget,
+        old_angles: angles,
+        old_target: target
+      };
+
+      const res = await fetch('/inverse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      angles = data.angles;
+
+      const fwdRes = await fetch('/forward', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ angles })
+      });
+      const kinematics = await fwdRes.json();
+
+      // Update target only if move was accepted by backend
+      if (JSON.stringify(data.angles) !== JSON.stringify(angles)) {
+        // backend rejected move, keep old target
+      } else {
+        target = clampedTarget;
+      }
+
+      drawArm(kinematics.joint1, kinematics.joint2, kinematics.end_effector);
+      updateTable(kinematics.joint1, kinematics.joint2, kinematics.end_effector, kinematics.angles);
+    }
+
+    // Keyboard handling for arrow keys + diagonal combinations
+    const keysPressed = {};
+    window.addEventListener('keydown', (e) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        keysPressed[e.key] = true;
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('keyup', (e) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        delete keysPressed[e.key];
+        e.preventDefault();
+      }
+    });
+
+    function getDirectionFromKeys() {
+      const up = keysPressed['ArrowUp'];
+      const down = keysPressed['ArrowDown'];
+      const left = keysPressed['ArrowLeft'];
+      const right = keysPressed['ArrowRight'];
+
+      if (up && left) return 'up-left';
+      if (up && right) return 'up-right';
+      if (down && left) return 'down-left';
+      if (down && right) return 'down-right';
+      if (up) return 'up';
+      if (down) return 'down';
+      if (left) return 'left';
+      if (right) return 'right';
+      return null;
+    }
+
+    // Continuous movement loop when keys held down
+    setInterval(() => {
+      const dir = getDirectionFromKeys();
+      if (dir) move(dir);
+    }, 100); // every 100ms
+
+    // Initialize at center
+    move('center');
+  </script>
+</body>
+</html>
